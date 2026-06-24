@@ -1,12 +1,16 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# Intelligent Skin Disease Diagnosis System
+# CS-3310 Artificial Intelligence | Assignment 3 | HAM10000 Dataset
+# Model: ResNet50 Transfer Learning
+# ══════════════════════════════════════════════════════════════════════════════
+
 import streamlit as st
 import numpy as np
 import json
 import tensorflow as tf
 from tensorflow.keras.models import load_model
-from tensorflow.keras.preprocessing.image import img_to_array
 from tensorflow.keras.applications.resnet50 import preprocess_input
 import matplotlib.pyplot as plt
-import matplotlib.cm as cm
 from PIL import Image
 import io
 from datetime import datetime
@@ -14,17 +18,17 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm as rcm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage
-from reportlab.lib.enums import TA_CENTER, TA_LEFT
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.enums import TA_CENTER
 
-# ── Page config ───────────────────────────────────────────────────────────────
+# ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Skin Disease Diagnosis System",
     page_icon="🔬",
     layout="wide"
 )
 
-# ── Custom CSS ────────────────────────────────────────────────────────────────
+# ── Custom CSS ─────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
     .risk-critical {
@@ -38,6 +42,12 @@ st.markdown("""
         background: linear-gradient(135deg, #ff6600, #cc4400);
         color: white; padding: 15px 20px; border-radius: 10px;
         font-size: 15px; font-weight: bold; text-align: center; margin: 10px 0;
+    }
+    .risk-uncertain {
+        background: linear-gradient(135deg, #886600, #554400);
+        color: #ffeeaa; padding: 15px 20px; border-radius: 10px;
+        font-size: 15px; font-weight: bold; text-align: center; margin: 10px 0;
+        border: 1px solid #bbaa00;
     }
     .risk-safe {
         background: linear-gradient(135deg, #00aa44, #007733);
@@ -63,18 +73,22 @@ st.markdown("""
         border-radius: 10px; padding: 18px 20px; margin-top: 10px;
         font-size: 14px; line-height: 1.7;
     }
-    .rec-urgent   { background: #3b0000; border: 1px solid #ff4444; color: #ffaaaa; }
-    .rec-caution  { background: #2b1a00; border: 1px solid #ff8800; color: #ffd080; }
-    .rec-monitor  { background: #002b10; border: 1px solid #00cc55; color: #80ffaa; }
+    .rec-urgent  { background: #3b0000; border: 1px solid #ff4444; color: #ffaaaa; }
+    .rec-caution { background: #2b1a00; border: 1px solid #ff8800; color: #ffd080; }
+    .rec-monitor { background: #002b10; border: 1px solid #00cc55; color: #80ffaa; }
     .legend-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
     .legend-table th { background: #313244; color: #cdd6f4; padding: 8px 10px; text-align: left; }
     .legend-table td { padding: 7px 10px; border-bottom: 1px solid #313244; color: #bac2de; }
-    .legend-mal  { color: #f38ba8; font-weight: bold; }
-    .legend-pre  { color: #fab387; font-weight: bold; }
-    .legend-ben  { color: #a6e3a1; font-weight: bold; }
+    .legend-mal { color: #f38ba8; font-weight: bold; }
+    .legend-pre { color: #fab387; font-weight: bold; }
+    .legend-ben { color: #a6e3a1; font-weight: bold; }
     .section-header {
         font-size: 20px; font-weight: 700; color: #cdd6f4;
         border-bottom: 2px solid #89b4fa; padding-bottom: 6px; margin-bottom: 14px;
+    }
+    .risk-factor-box {
+        background: #2b1500; border: 1px solid #ff8800; border-radius: 8px;
+        padding: 10px 14px; margin: 6px 0; color: #ffd080; font-size: 13px;
     }
     @keyframes pulse {
         0%   { box-shadow: 0 0 0 0 rgba(255,0,0,0.5); }
@@ -84,7 +98,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ── Load model ────────────────────────────────────────────────────────────────
+# ── Load model (cached so it only loads once) ──────────────────────────────────
 @st.cache_resource
 def load_resources():
     def categorical_focal_loss(alpha, gamma=2.0):
@@ -107,7 +121,7 @@ def load_resources():
 
 model, class_list = load_resources()
 
-# ── Disease info ──────────────────────────────────────────────────────────────
+# ── Disease info dictionary ────────────────────────────────────────────────────
 disease_info = {
     'akiec': {
         'name': 'Actinic Keratoses / Intraepithelial Carcinoma',
@@ -167,7 +181,7 @@ disease_info = {
     },
 }
 
-# ── Grad-CAM ──────────────────────────────────────────────────────────────────
+# ── Grad-CAM ───────────────────────────────────────────────────────────────────
 def make_gradcam(img_array, model, layer_name='conv5_block3_out'):
     grad_model = tf.keras.models.Model(
         [model.inputs],
@@ -186,15 +200,51 @@ def make_gradcam(img_array, model, layer_name='conv5_block3_out'):
 
 def overlay_gradcam(original_img_array, heatmap, alpha=0.4):
     heatmap_uint8 = np.uint8(255 * heatmap)
-    jet_colors = cm.get_cmap('jet')(np.arange(256))[:, :3]
+    # Use plt.colormaps (new API, no deprecation warning)
+    jet_colors = plt.colormaps['jet'](np.arange(256))[:, :3]
     jet_heatmap = jet_colors[heatmap_uint8]
     jet_heatmap_img = Image.fromarray(np.uint8(jet_heatmap * 255)).resize((224, 224))
     jet_heatmap_arr = np.array(jet_heatmap_img).astype(float)
     superimposed = np.uint8(np.clip(jet_heatmap_arr * alpha + original_img_array, 0, 255))
     return superimposed
 
-# ── PDF Report Generator ──────────────────────────────────────────────────────
-def generate_pdf_report(patient_data, prediction_data, orig_img_array, overlay_img_array):
+# ── Helper functions ───────────────────────────────────────────────────────────
+def get_confidence_label(conf):
+    """Returns label text and CSS class. Thresholds: 80=high, 65=moderate, else uncertain."""
+    if conf >= 80:
+        return "🟢 High Confidence", "confidence-high"
+    elif conf >= 65:
+        return "🟡 Moderate Confidence", "confidence-med"
+    else:
+        return "🔴 Low Confidence — Uncertain prediction", "confidence-low"
+
+def get_confidence_level(conf):
+    """Returns short level string for logic checks."""
+    if conf >= 80:
+        return "high"
+    elif conf >= 65:
+        return "moderate"
+    else:
+        return "uncertain"
+
+def get_bar_color(cls):
+    t = disease_info[cls]['type']
+    if t == 'malignant':    return '#f38ba8'
+    if t == 'premalignant': return '#fab387'
+    return '#a6e3a1'
+
+def get_risk_factors(age, localization, info):
+    """Returns list of risk factor warning strings."""
+    factors = []
+    sun_exposed = ['face', 'scalp', 'ear', 'neck', 'hand', 'acral']
+    if age > 60 and info['type'] in ['malignant', 'premalignant']:
+        factors.append(f"🔴 Age risk: Patient is {age} years old — age over 60 increases malignancy risk significantly.")
+    if localization in sun_exposed and info['type'] in ['malignant', 'premalignant']:
+        factors.append(f"🔴 Location risk: '{localization.capitalize()}' is a sun-exposed area — increases risk of malignant progression.")
+    return factors
+
+# ── PDF Report Generator ───────────────────────────────────────────────────────
+def generate_pdf_report(patient_data, prediction_data, img_array, overlay_array):
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4,
                             rightMargin=2*rcm, leftMargin=2*rcm,
@@ -214,11 +264,13 @@ def generate_pdf_report(patient_data, prediction_data, orig_img_array, overlay_i
     body_style = ParagraphStyle('body', parent=styles['Normal'],
                                 fontSize=10, leading=14, spaceAfter=6)
 
-    story.append(Paragraph("🔬 Intelligent Skin Disease Diagnosis Report", title_style))
+    # Title
+    story.append(Paragraph("Intelligent Skin Disease Diagnosis Report", title_style))
     story.append(Paragraph("CS-3310 Artificial Intelligence | HAM10000 Dataset | ResNet50 Model", sub_style))
     story.append(Paragraph(f"Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}", sub_style))
     story.append(Spacer(1, 0.3*rcm))
 
+    # Patient info
     story.append(Paragraph("Patient Information", h2_style))
     pt = patient_data
     p_data = [
@@ -241,6 +293,7 @@ def generate_pdf_report(patient_data, prediction_data, orig_img_array, overlay_i
     story.append(p_table)
     story.append(Spacer(1, 0.4*rcm))
 
+    # Diagnosis results
     story.append(Paragraph("Diagnosis Results", h2_style))
     pd_ = prediction_data
     info = disease_info[pd_['class']]
@@ -254,6 +307,7 @@ def generate_pdf_report(patient_data, prediction_data, orig_img_array, overlay_i
         ['Confidence', f"{pd_['confidence']:.1f}%"],
         ['Confidence Level', pd_['conf_label']],
         ['2nd Most Likely', f"{pd_['second_class'].upper()} ({pd_['second_conf']:.1f}%)"],
+        ['3rd Most Likely', f"{pd_['third_class'].upper()} ({pd_['third_conf']:.1f}%)"],
     ]
     d_table = Table(d_data, colWidths=[5*rcm, 10*rcm])
     d_table.setStyle(TableStyle([
@@ -271,11 +325,12 @@ def generate_pdf_report(patient_data, prediction_data, orig_img_array, overlay_i
     story.append(Paragraph(f"Recommendation: {info['recommendation']}", body_style))
     story.append(Spacer(1, 0.4*rcm))
 
+    # Confidence per class table
     story.append(Paragraph("Confidence Per Class", h2_style))
     cls_data = [['Class', 'Disease', 'Confidence', 'Type']]
-    type_labels = {'malignant':'Malignant','premalignant':'Pre-malignant','benign':'Benign'}
+    type_labels = {'malignant': 'Malignant', 'premalignant': 'Pre-malignant', 'benign': 'Benign'}
     for i, cls in enumerate(pd_['class_list']):
-        conf_val = f"{pd_['all_preds'][i]*100:.1f}%"
+        conf_val = f"{pd_['all_preds'][i] * 100:.1f}%"
         cls_data.append([cls.upper(), disease_info[cls]['name'], conf_val,
                          type_labels[disease_info[cls]['type']]])
     cls_table = Table(cls_data, colWidths=[2*rcm, 7*rcm, 3*rcm, 3*rcm])
@@ -291,11 +346,12 @@ def generate_pdf_report(patient_data, prediction_data, orig_img_array, overlay_i
     story.append(cls_table)
     story.append(Spacer(1, 0.4*rcm))
 
+    # ABCDE rule
     story.append(Paragraph("ABCDE Rule Assessment", h2_style))
     abcde = [
-        ('A — Asymmetry', 'Check if one half of the lesion does not match the other half in shape or color.'),
-        ('B — Border', 'Look for irregular, ragged, notched, or blurred edges.'),
-        ('C — Color', 'Multiple colors (brown, black, red, white, blue) within one lesion are a warning sign.'),
+        ('A — Asymmetry', 'One half of the lesion does not match the other half in shape or color.'),
+        ('B — Border', 'Irregular, ragged, notched, or blurred edges are a warning sign.'),
+        ('C — Color', 'Multiple colors (brown, black, red, white, blue) within one lesion.'),
         ('D — Diameter', 'Lesions larger than 6mm (size of a pencil eraser) warrant attention.'),
         ('E — Evolution', 'Any change in size, shape, color, or new symptoms like bleeding is concerning.'),
     ]
@@ -303,9 +359,10 @@ def generate_pdf_report(patient_data, prediction_data, orig_img_array, overlay_i
         story.append(Paragraph(f"<b>{letter}:</b> {desc}", body_style))
     story.append(Spacer(1, 0.4*rcm))
 
+    # Disclaimer
     story.append(Paragraph("Disclaimer", h2_style))
     story.append(Paragraph(
-        "⚠️ This report is generated by an AI system for educational and research purposes only. "
+        "This report is generated by an AI system for educational and research purposes only. "
         "It is NOT a substitute for professional medical advice, diagnosis, or treatment. "
         "Always consult a qualified dermatologist or healthcare provider for any medical concerns.",
         ParagraphStyle('disc', parent=styles['Normal'], fontSize=9,
@@ -316,37 +373,22 @@ def generate_pdf_report(patient_data, prediction_data, orig_img_array, overlay_i
     buf.seek(0)
     return buf
 
-# ── Confidence label helper ───────────────────────────────────────────────────
-def get_confidence_label(conf):
-    if conf >= 70:
-        return "🟢 High Confidence", "confidence-high"
-    elif conf >= 50:
-        return "🟡 Moderate Confidence", "confidence-med"
-    else:
-        return "🔴 Low Confidence — Consider recapturing or consulting a specialist", "confidence-low"
-
-# ── Bar color helper ──────────────────────────────────────────────────────────
-def get_bar_color(cls):
-    t = disease_info[cls]['type']
-    if t == 'malignant':    return '#f38ba8'
-    if t == 'premalignant': return '#fab387'
-    return '#a6e3a1'
-
 # ══════════════════════════════════════════════════════════════════════════════
-# ── UI HEADER ─────────────────────────────────────────────────────────────────
+# ── UI HEADER ──────────────────────────────────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════════
 st.title("🔬 Intelligent Skin Disease Diagnosis System")
 st.markdown("**CS-3310 Artificial Intelligence | Assignment 3 | HAM10000 Dataset**")
 st.markdown("Upload a dermoscopic skin lesion image along with patient details to get an AI-assisted diagnosis.")
+st.info("ℹ️ This system uses ResNet50 transfer learning trained on HAM10000 (10,015 images, 7 disease categories).")
 st.markdown("---")
 
-# ── Input section ─────────────────────────────────────────────────────────────
+# ── Input section ──────────────────────────────────────────────────────────────
 col1, col2 = st.columns([1, 1])
 
 with col1:
     st.subheader("📋 Patient Information")
     uploaded_file = st.file_uploader("Upload skin lesion image (JPG/PNG)", type=['jpg', 'jpeg', 'png'])
-    age = st.slider("Patient Age", min_value=0, max_value=85, value=45)
+    age = st.slider("Patient Age", min_value=0, max_value=85, value=45, step=1)
     sex = st.selectbox("Sex", options=['male', 'female', 'unknown'])
     localization = st.selectbox("Lesion Location", options=[
         'back', 'lower extremity', 'trunk', 'upper extremity',
@@ -359,8 +401,8 @@ with col2:
         st.subheader("🖼️ Uploaded Image")
         image = Image.open(uploaded_file).convert('RGB')
         st.image(image, width=300)
-    
-    # ── Disease Legend Table ───────────────────────────────────────────────
+
+    # Disease reference table — always visible
     st.subheader("📖 Disease Code Reference")
     st.markdown("""
     <table class="legend-table">
@@ -378,50 +420,87 @@ with col2:
 st.markdown("---")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ── ANALYSIS ──────────────────────────────────────────────────────────────────
+# ── ANALYSIS ───────────────────────────────────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════════
 if uploaded_file is not None:
     if st.button("🔍 Analyze Image", type="primary"):
+
+        # Basic input validation
+        if image.size[0] < 50 or image.size[1] < 50:
+            st.error("❌ Image too small. Please upload a clear dermoscopic photo (minimum 50×50 pixels).")
+            st.stop()
+
         with st.spinner("Analyzing image with ResNet50 + Grad-CAM... please wait"):
 
+            # Preprocess
             img = image.resize((224, 224))
             img_array = np.array(img).astype(float)
             img_input = preprocess_input(np.expand_dims(img_array.copy(), axis=0))
 
+            # Predict
             preds = model.predict(img_input, verbose=0)
-            pred_idx    = int(np.argmax(preds[0]))
-            confidence  = float(preds[0][pred_idx]) * 100
+            pred_idx        = int(np.argmax(preds[0]))
+            confidence      = float(preds[0][pred_idx]) * 100
             predicted_class = class_list[pred_idx]
 
+            # Top 3 predictions
             sorted_idx  = np.argsort(preds[0])[::-1]
             second_idx  = sorted_idx[1]
-            second_conf = float(preds[0][second_idx]) * 100
+            third_idx   = sorted_idx[2]
             second_cls  = class_list[second_idx]
+            second_conf = float(preds[0][second_idx]) * 100
+            third_cls   = class_list[third_idx]
+            third_conf  = float(preds[0][third_idx]) * 100
 
+            # Gap between 1st and 2nd (close-call check)
+            gap = confidence - second_conf
+            is_close_call = gap < 20
+
+            # Grad-CAM
             heatmap = make_gradcam(img_input, model)
             overlay = overlay_gradcam(img_array, heatmap)
 
+            # Confidence label + level
             conf_label, conf_css = get_confidence_label(confidence)
+            conf_level           = get_confidence_level(confidence)
+
+            # Disease info for predicted class
             info = disease_info[predicted_class]
+
+            # Melanoma secondary alert check
             mel_conf = float(preds[0][class_list.index('mel')]) * 100 if 'mel' in class_list else 0
+
+            # Risk factors
+            risk_factors = get_risk_factors(age, localization, info)
 
         st.markdown("---")
 
-        # ── PATIENT SUMMARY CARD ─────────────────────────────────────────────
+        # ── PATIENT SUMMARY CARD ────────────────────────────────────────────────
         st.markdown('<div class="section-header">📋 Patient Summary</div>', unsafe_allow_html=True)
         st.markdown(f"""
         <div class="patient-card">
             <h4>👤 Patient Profile</h4>
-            <p>🎂 <b>Age:</b> {age} years &nbsp;|&nbsp; 
-               ⚧ <b>Sex:</b> {sex.capitalize()} &nbsp;|&nbsp; 
+            <p>🎂 <b>Age:</b> {age} years &nbsp;|&nbsp;
+               ⚧ <b>Sex:</b> {sex.capitalize()} &nbsp;|&nbsp;
                📍 <b>Lesion Location:</b> {localization.capitalize()}</p>
             <p>📅 <b>Analysis Date:</b> {datetime.now().strftime('%B %d, %Y at %I:%M %p')}</p>
             <p>🤖 <b>Model Used:</b> ResNet50 (Transfer Learning) | HAM10000 Dataset</p>
         </div>
         """, unsafe_allow_html=True)
 
-        # ── RISK ALERT ───────────────────────────────────────────────────────
-        if predicted_class in ['mel', 'bcc']:
+        # ── RISK ALERT BANNER ───────────────────────────────────────────────────
+        if conf_level == "uncertain":
+            # Low confidence — don't show a firm disease diagnosis in the banner
+            st.markdown(f"""
+            <div class="risk-uncertain">
+                ⚠️ UNCERTAIN PREDICTION — Confidence: {confidence:.1f}%<br>
+                <span style="font-size:13px; font-weight:normal;">
+                The model is not confident. Top guess: <b>{predicted_class.upper()}</b>,
+                2nd guess: <b>{second_cls.upper()}</b> ({second_conf:.1f}%).
+                Do NOT rely on this result. Please consult a dermatologist.
+                </span>
+            </div>""", unsafe_allow_html=True)
+        elif predicted_class in ['mel', 'bcc']:
             st.markdown(f"""
             <div class="risk-critical">
                 🚨 CRITICAL RISK ALERT — {info['name'].upper()} DETECTED<br>
@@ -437,12 +516,12 @@ if uploaded_file is not None:
                 Schedule a dermatologist appointment within 2–4 weeks.
                 </span>
             </div>""", unsafe_allow_html=True)
-        elif mel_conf >= 25 and predicted_class != 'mel':
+        elif mel_conf >= 35 and predicted_class != 'mel':
             st.markdown(f"""
             <div class="risk-warning">
-                ⚠️ SECONDARY MELANOMA SUSPICION — mel confidence: {mel_conf:.1f}%<br>
+                ⚠️ SECONDARY MELANOMA SUSPICION — Melanoma confidence: {mel_conf:.1f}%<br>
                 <span style="font-size:13px; font-weight:normal;">
-                While the primary prediction is {predicted_class.upper()}, elevated melanoma probability 
+                Primary prediction is {predicted_class.upper()}, but elevated melanoma probability
                 warrants a dermatologist review.
                 </span>
             </div>""", unsafe_allow_html=True)
@@ -455,20 +534,41 @@ if uploaded_file is not None:
                 </span>
             </div>""", unsafe_allow_html=True)
 
+        # ── CLOSE-CALL WARNING ──────────────────────────────────────────────────
+        if is_close_call:
+            st.warning(
+                f"⚠️ **Close Call:** Model is torn between **{predicted_class.upper()}** ({confidence:.1f}%) "
+                f"and **{second_cls.upper()}** ({second_conf:.1f}%). Gap is only {gap:.1f}%. "
+                f"Please seek clinical verification."
+            )
+
+        # ── RISK FACTOR WARNINGS ────────────────────────────────────────────────
+        if risk_factors:
+            for rf in risk_factors:
+                st.markdown(f'<div class="risk-factor-box">{rf}</div>', unsafe_allow_html=True)
+
         st.markdown("---")
 
-        # ══════════════════════════════════════════════════════════════════════
-        # ── RESULTS: 3 COLUMNS ────────────────────────────────────────────────
-        # ══════════════════════════════════════════════════════════════════════
+        # ── RESULTS: 3 COLUMNS ──────────────────────────────────────────────────
         st.markdown('<div class="section-header">📊 Diagnosis Results</div>', unsafe_allow_html=True)
         res_col1, res_col2, res_col3 = st.columns([1.1, 1.1, 1.3])
 
-        # ── COL 1: Primary Prediction ─────────────────────────────────────────
+        # ── COL 1: Prediction details ───────────────────────────────────────────
         with res_col1:
             st.markdown("##### 🎯 Primary Prediction")
             st.metric("Predicted Class", predicted_class.upper())
             st.markdown(f"**{info['name']}**")
-            st.markdown(f"{info['severity']}")
+
+            # Show severity differently based on confidence
+            if conf_level == "uncertain":
+                st.warning("⚠️ Confidence too low — treat this prediction with caution")
+            elif info['type'] == 'malignant':
+                st.error(f"{info['severity']}")
+            elif info['type'] == 'premalignant':
+                st.warning(f"{info['severity']}")
+            else:
+                st.success(f"{info['severity']}")
+
             st.markdown(f"*{info['description']}*")
 
             st.markdown("---")
@@ -479,15 +579,21 @@ if uploaded_file is not None:
             st.markdown(f"{info2['severity']}")
 
             st.markdown("---")
+            st.markdown("##### 🥉 3rd Most Likely")
+            info3 = disease_info[third_cls]
+            st.markdown(f"**{third_cls.upper()}** — {third_conf:.1f}%")
+            st.markdown(f"{info3['name']}")
+            st.markdown(f"{info3['severity']}")
+
+            st.markdown("---")
             st.markdown("##### 📊 Confidence Level")
             st.markdown(f'<span class="{conf_css}">{conf_label}</span>', unsafe_allow_html=True)
             st.markdown(f"**Score: {confidence:.1f}%**")
 
-        # ── COL 2: Confidence Bars ────────────────────────────────────────────
+        # ── COL 2: Confidence bar chart ─────────────────────────────────────────
         with res_col2:
             st.markdown("##### 📈 Confidence Per Class")
-            
-            # Matplotlib colored bar chart
+
             cls_names  = [c.upper() for c in class_list]
             cls_values = [float(preds[0][i]) * 100 for i in range(len(class_list))]
             bar_colors = [get_bar_color(c) for c in class_list]
@@ -498,18 +604,16 @@ if uploaded_file is not None:
 
             bars = ax.barh(cls_names, cls_values, color=bar_colors, edgecolor='none', height=0.6)
             for bar, val in zip(bars, cls_values):
-                ax.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height()/2,
+                ax.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height() / 2,
                         f'{val:.1f}%', va='center', ha='left',
                         color='white', fontsize=9, fontweight='bold')
 
-            ax.set_xlim(0, max(cls_values) * 1.25)
+            ax.set_xlim(0, max(cls_values) * 1.25 if max(cls_values) > 0 else 100)
             ax.set_xlabel('Confidence (%)', color='#cdd6f4', fontsize=9)
             ax.tick_params(colors='#cdd6f4', labelsize=9)
             for spine in ax.spines.values():
                 spine.set_visible(False)
-            ax.xaxis.set_tick_params(color='#444')
 
-            # Legend
             from matplotlib.patches import Patch
             legend_elements = [
                 Patch(facecolor='#f38ba8', label='Malignant'),
@@ -522,13 +626,12 @@ if uploaded_file is not None:
 
             plt.tight_layout()
             buf_chart = io.BytesIO()
-            plt.savefig(buf_chart, format='png', dpi=100, bbox_inches='tight',
-                        facecolor='#1e1e2e')
+            plt.savefig(buf_chart, format='png', dpi=100, bbox_inches='tight', facecolor='#1e1e2e')
             buf_chart.seek(0)
             st.image(buf_chart, use_container_width=True)
             plt.close()
 
-        # ── COL 3: Grad-CAM ───────────────────────────────────────────────────
+        # ── COL 3: Grad-CAM ─────────────────────────────────────────────────────
         with res_col3:
             st.markdown("##### 🔬 Grad-CAM Explainability")
             st.markdown("*Red/yellow = high model attention | Blue = low attention*")
@@ -546,7 +649,6 @@ if uploaded_file is not None:
             axes[1].set_title("Grad-CAM Heatmap", color='#cdd6f4', fontsize=10, pad=8)
             axes[1].axis('off')
 
-            # Colorbar
             sm = plt.cm.ScalarMappable(cmap='jet', norm=plt.Normalize(vmin=0, vmax=1))
             sm.set_array([])
             cbar = fig2.colorbar(sm, ax=axes[1], fraction=0.046, pad=0.04)
@@ -555,26 +657,25 @@ if uploaded_file is not None:
 
             plt.tight_layout()
             buf2 = io.BytesIO()
-            plt.savefig(buf2, format='png', dpi=100, bbox_inches='tight',
-                        facecolor='#1e1e2e')
+            plt.savefig(buf2, format='png', dpi=100, bbox_inches='tight', facecolor='#1e1e2e')
             buf2.seek(0)
             st.image(buf2, use_container_width=True)
             plt.close()
 
         st.markdown("---")
 
-        # ── ABCDE RULE ────────────────────────────────────────────────────────
+        # ── ABCDE RULE ──────────────────────────────────────────────────────────
         st.markdown('<div class="section-header">🔤 ABCDE Rule — Dermoscopy Checklist</div>',
                     unsafe_allow_html=True)
         st.markdown("*Standard dermatology rule used to evaluate suspicious skin lesions:*")
 
         abcde_cols = st.columns(5)
         abcde_data = [
-            ("A", "Asymmetry",  "One half doesn't match the other in shape or color."),
-            ("B", "Border",     "Irregular, ragged, notched, or blurred edges."),
-            ("C", "Color",      "Multiple colors (brown, black, red, white, blue) in one lesion."),
-            ("D", "Diameter",   "Larger than 6mm (pencil eraser size) is concerning."),
-            ("E", "Evolution",  "Any recent change in size, shape, color, or new symptoms."),
+            ("A", "Asymmetry", "One half doesn't match the other in shape or color."),
+            ("B", "Border",    "Irregular, ragged, notched, or blurred edges."),
+            ("C", "Color",     "Multiple colors (brown, black, red, white, blue) in one lesion."),
+            ("D", "Diameter",  "Larger than 6mm (pencil eraser size) is concerning."),
+            ("E", "Evolution", "Any recent change in size, shape, color, or new symptoms."),
         ]
         for col, (letter, title, desc) in zip(abcde_cols, abcde_data):
             with col:
@@ -586,11 +687,11 @@ if uploaded_file is not None:
 
         st.markdown("---")
 
-        # ── RECOMMENDATION ────────────────────────────────────────────────────
+        # ── CLINICAL RECOMMENDATION ─────────────────────────────────────────────
         st.markdown('<div class="section-header">📋 Clinical Recommendation</div>',
                     unsafe_allow_html=True)
 
-        rec_class = 'rec-urgent' if info['urgency'] == 'urgent' else \
+        rec_class = 'rec-urgent'  if info['urgency'] == 'urgent'  else \
                     'rec-caution' if info['urgency'] == 'caution' else 'rec-monitor'
 
         timeline_map = {
@@ -598,33 +699,36 @@ if uploaded_file is not None:
             'caution': '🕐 Timeframe: Schedule an appointment within 2–4 weeks',
             'monitor': '🕐 Timeframe: Routine check-up every 6–12 months',
         }
+        next_steps = {
+            'urgent':  "• Contact a dermatologist or oncologist immediately<br>• Do not use home remedies or delay<br>• Bring this report to your appointment",
+            'caution': "• Book a dermatology appointment<br>• Avoid sun exposure on the lesion<br>• Photograph the lesion weekly to track changes",
+            'monitor': "• Monitor using the ABCDE rule monthly<br>• Photograph the lesion every 3 months<br>• See a doctor if any change is noticed",
+        }
         st.markdown(f"""
         <div class="rec-box {rec_class}">
             <b>{info['recommendation']}</b><br><br>
             {timeline_map[info['urgency']]}<br><br>
             📌 <b>Next Steps:</b><br>
-            {"• Contact a dermatologist or oncologist immediately<br>• Do not use home remedies or delay<br>• Bring this report to your appointment"
-              if info['urgency'] == 'urgent' else
-             "• Book a dermatology appointment<br>• Avoid sun exposure on the lesion<br>• Photograph the lesion weekly to track changes"
-              if info['urgency'] == 'caution' else
-             "• Monitor using the ABCDE rule monthly<br>• Photograph the lesion every 3 months<br>• See a doctor if any change is noticed"}
+            {next_steps[info['urgency']]}
         </div>
         """, unsafe_allow_html=True)
 
         st.markdown("---")
 
-        # ── PDF DOWNLOAD ──────────────────────────────────────────────────────
+        # ── PDF DOWNLOAD ────────────────────────────────────────────────────────
         st.markdown('<div class="section-header">📄 Download Report</div>', unsafe_allow_html=True)
 
         patient_data = {'age': age, 'sex': sex, 'location': localization}
         prediction_data = {
-            'class': predicted_class,
-            'confidence': confidence,
-            'conf_label': conf_label,
+            'class':        predicted_class,
+            'confidence':   confidence,
+            'conf_label':   conf_label,
             'second_class': second_cls,
-            'second_conf': second_conf,
-            'all_preds': preds[0],
-            'class_list': class_list,
+            'second_conf':  second_conf,
+            'third_class':  third_cls,
+            'third_conf':   third_conf,
+            'all_preds':    preds[0],
+            'class_list':   class_list,
         }
 
         try:
@@ -636,15 +740,18 @@ if uploaded_file is not None:
                 mime="application/pdf",
                 type="primary"
             )
-            st.caption("PDF includes patient info, diagnosis, all confidence scores, ABCDE rule, and recommendations.")
+            st.caption("PDF includes patient info, diagnosis, top-3 predictions, all confidence scores, ABCDE rule, and recommendations.")
         except Exception as e:
             st.info(f"PDF generation requires `reportlab`. Install with: `pip install reportlab`\n\nError: {e}")
 
-        # ── DISCLAIMER ────────────────────────────────────────────────────────
+        # ── FINAL DISCLAIMER ────────────────────────────────────────────────────
         st.markdown("---")
-        st.warning("⚠️ **Disclaimer:** This system is for **educational and research purposes only**. "
-                   "It is NOT a substitute for professional medical advice. "
-                   "Always consult a qualified dermatologist for any skin concerns.")
+        if conf_level == "uncertain":
+            st.error("🚨 This prediction has LOW CONFIDENCE. Do NOT use this result for any medical decision. Consult a qualified dermatologist.")
+        else:
+            st.warning("⚠️ **Disclaimer:** This system is for **educational and research purposes only**. "
+                       "It is NOT a substitute for professional medical advice. "
+                       "Always consult a qualified dermatologist for any skin concerns.")
 
 else:
     st.info("👆 Please upload a dermoscopic skin lesion image to begin analysis.")
